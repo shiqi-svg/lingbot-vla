@@ -4,8 +4,8 @@ LingBot-VLA Inference Profiling Benchmark Script
 =================================================
 Measures the following metrics (matching the profiling output format):
   - Total inference time (ms)
-  - Video FDM loop (prefix encoding: vision + language) time, steps, percentage
-  - Action FDM loop (iterative denoising) time, steps, percentage
+  - Video  loop (prefix encoding: vision + language) time, steps, percentage
+  - Action  loop (iterative denoising) time, steps, percentage
   - Latent embed (MLP): action_time_mlp total/avg time
   - Action embed (linear): action_in_proj + action_out_proj total/avg time
   - TFLOPs total
@@ -135,6 +135,8 @@ def load_model(model_path, use_bf16=True):
     print(f"Loading model from: {model_path}")
     config = PreTrainedConfig.from_pretrained(model_path)
 
+    # print(f"-------查看config:--------\n {config}\n----------结束查看config------------------")
+
     training_config_path = Path(model_path) / 'lingbotvla_cli.yaml'
     if not training_config_path.exists():
         # Try different levels up
@@ -155,14 +157,14 @@ def load_model(model_path, use_bf16=True):
         v = getattr(config, k, training_model_config[k])
         setattr(config, k, v)
 
-    config.attention_implementation = 'eager'
+    # config.attention_implementation = 'flex'
 
     base_model_path = BASE_MODEL_PATH['lingbotvla']
     config.tokenizer_path = base_model_path
 
     qwen_config = AutoConfig.from_pretrained(base_model_path)
     config = merge_qwen_config(config, qwen_config)
-
+    # print(f"-------查看merged  qwen_config 后的config:--------\n {config}\n----------结束查看merged config------------------")
     if 'vocab_size' in training_config['model'] and training_config['model']['vocab_size'] != 0:
         config.vocab_size = training_config['model']['vocab_size']
 
@@ -219,7 +221,7 @@ def create_dummy_observation(config, language_tokenizer, image_processor):
         img = torch.randint(0, 255, (3, h, w), dtype=torch.uint8)
         dummy_images[key] = img
 
-    state_dim = config.action_dim if hasattr(config, 'action_dim') else 14
+    state_dim = config.action_dim if hasattr(config, 'action_dim') else 16
     dummy_state = torch.randn(state_dim, dtype=torch.float32)
 
     obs_dict = {
@@ -294,7 +296,7 @@ def profile_inference(policy, config, observation, num_steps, use_bf16=True):
     torch.cuda.synchronize()
     total_start = time.perf_counter()
 
-    # --- Video FDM: Prefix Encoding (Vision + Language) ---
+    # --- Video  : Prefix Encoding (Vision + Language) ---
     torch.cuda.synchronize()
     video_start = time.perf_counter()
 
@@ -319,7 +321,7 @@ def profile_inference(policy, config, observation, num_steps, use_bf16=True):
     video_end = time.perf_counter()
     video_time_ms = (video_end - video_start) * 1000.0
 
-    # --- Action FDM: Iterative Denoising Loop ---
+    # --- Action  : Iterative Denoising Loop ---
     torch.cuda.synchronize()
     action_start = time.perf_counter()
 
@@ -440,10 +442,10 @@ def profile_inference(policy, config, observation, num_steps, use_bf16=True):
     total_time_ms = (total_end - total_start) * 1000.0
 
     results['total_infer_ms'] = total_time_ms
-    results['video_fdm_ms'] = video_time_ms
-    results['video_fdm_steps'] = 1  # Prefix computed once (1 forward pass through VLM)
-    results['action_fdm_ms'] = action_time_ms
-    results['action_fdm_steps'] = step_count
+    results['video_ms'] = video_time_ms
+    results['video_steps'] = 1  # Prefix computed once (1 forward pass through VLM)
+    results['action_ms'] = action_time_ms
+    results['action_steps'] = step_count
     results['latent_embed_total_ms'] = latent_embed_total_ms
     results['latent_embed_calls'] = latent_embed_calls
     results['action_embed_total_ms'] = action_embed_total_ms
@@ -670,17 +672,17 @@ def run_benchmark(args):
     std = lambda key: np.std([r[key] for r in all_results])
 
     total_infer_ms = avg('total_infer_ms')
-    video_fdm_ms = avg('video_fdm_ms')
-    action_fdm_ms = avg('action_fdm_ms')
-    video_steps = all_results[0]['video_fdm_steps']
-    action_steps = all_results[0]['action_fdm_steps']
+    video_ms = avg('video_ms')
+    action_ms = avg('action_ms')
+    video_steps = all_results[0]['video_steps']
+    action_steps = all_results[0]['action_steps']
     latent_embed_total = avg('latent_embed_total_ms')
     latent_embed_calls = all_results[0]['latent_embed_calls']
     action_embed_total = avg('action_embed_total_ms')
     action_embed_calls = all_results[0]['action_embed_calls']
 
-    video_pct = video_fdm_ms / total_infer_ms * 100
-    action_pct = action_fdm_ms / total_infer_ms * 100
+    video_pct = video_ms / total_infer_ms * 100
+    action_pct = action_ms / total_infer_ms * 100
     latent_embed_pct = latent_embed_total / total_infer_ms * 100
     action_embed_pct = action_embed_total / total_infer_ms * 100
     latent_embed_avg = latent_embed_total / latent_embed_calls if latent_embed_calls > 0 else 0
@@ -692,8 +694,8 @@ def run_benchmark(args):
     action_tflops = flops_info['action_flops'] / 1e12
 
     total_infer_s = total_infer_ms / 1000.0
-    video_infer_s = video_fdm_ms / 1000.0
-    action_infer_s = action_fdm_ms / 1000.0
+    video_infer_s = video_ms / 1000.0
+    action_infer_s = action_ms / 1000.0
 
     tflops_per_s_overall = total_tflops / total_infer_s if total_infer_s > 0 else 0
     tflops_per_s_video = video_tflops / video_infer_s if video_infer_s > 0 else 0
@@ -731,8 +733,8 @@ def run_benchmark(args):
     print("=" * 80)
     print()
     print(f"  Total _infer          : {total_infer_ms:.1f} ms")
-    print(f"  Video FDM loop        : {video_fdm_ms:.1f} ms  ({video_steps} steps), percentage:{video_pct:.1f}%")
-    print(f"  Action FDM loop       : {action_fdm_ms:.1f} ms  ({action_steps} steps), percentage:{action_pct:.1f}%")
+    print(f"  Video  loop        : {video_ms:.1f} ms  ({video_steps} steps), percentage:{video_pct:.1f}%")
+    print(f"  Action  loop       : {action_ms:.1f} ms  ({action_steps} steps), percentage:{action_pct:.1f}%")
     print(f"  Latent embed (MLP)    : {latent_embed_total:.1f} ms total / {latent_embed_avg:.2f} ms avg ({latent_embed_calls} calls), percentage:{latent_embed_pct:.1f}%")
     print(f"  Action embed (linear) : {action_embed_total:.1f} ms total / {action_embed_avg:.2f} ms avg ({action_embed_calls} calls), percentage:{action_embed_pct:.1f}%")
     print(f"  TFLOPs total          : {total_tflops:.2f} TFLOPs")
@@ -771,14 +773,20 @@ def run_benchmark(args):
     print()
     print(f"  [Timing Std Dev] {'=' * 59}")
     print(f"  Total infer std       : ±{std('total_infer_ms'):.1f} ms")
-    print(f"  Video FDM std         : ±{std('video_fdm_ms'):.1f} ms")
-    print(f"  Action FDM std        : ±{std('action_fdm_ms'):.1f} ms")
+    print(f"  Video  std         : ±{std('video_ms'):.1f} ms")
+    print(f"  Action  std        : ±{std('action_ms'):.1f} ms")
     print("=" * 80)
+
+    # print(f"查看training_config['model']['vocab_size']: {training_config['model']['vocab_size']}")
+
+    # print(f"-------查看config:--------\n {config}\n----------结束查看config------------------")
+
+    # print(f"\n-------training_config:--------\n {training_config}\n----------结束查看training_config------------------")
 
     return {
         'total_infer_ms': total_infer_ms,
-        'video_fdm_ms': video_fdm_ms,
-        'action_fdm_ms': action_fdm_ms,
+        'video_ms': video_ms,
+        'action_ms': action_ms,
         'latent_embed_total_ms': latent_embed_total,
         'action_embed_total_ms': action_embed_total,
         'tflops_total': total_tflops,
@@ -811,6 +819,15 @@ def main():
     parser.add_argument("--no_bf16", action="store_true", default=False,
                         help="Use float32 precision")
     args = parser.parse_args()
+
+    # 打印出当前真正在内存里干活的 flash_attn 所在的物理路径和版本
+    import sys
+    import flash_attn
+    print("================= FA 测试 =================")
+    print(f"当前加载的模块路径: {flash_attn.__file__}")
+    print(f"当前加载的模块版本: {getattr(flash_attn, '__version__', '未知版本')}")
+    print("=================================================")
+
     if args.no_bf16:
         args.use_bf16 = False
     run_benchmark(args)
