@@ -86,7 +86,7 @@ def run_dims():
         orig_yaml = f.read()
 
     results = {name: [] for name in METRICS}
-    results['chunk_size'] = []
+    results['dim'] = []
 
     try:
         for cs in DIMS:
