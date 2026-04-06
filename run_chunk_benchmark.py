@@ -14,6 +14,7 @@ CONFIG_JSON = "./checkpoints/lingbot-vla-4b-posttrain-robotwin/config.json"
 CLI_YAML = "./checkpoints/lingbot-vla-4b-posttrain-robotwin/lingbotvla_cli.yaml"
 
 CHUNK_SIZES = [16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
+DIMS = [16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
 
 METRICS = {
     "Total_infer": r"Total _infer\s*:\s*([\d.]+)\s*ms",
@@ -37,6 +38,14 @@ def update_config(chunk_size):
     with open(CLI_YAML, 'r') as f:
         cli_config = yaml.safe_load(f)
     cli_config['train']['chunk_size'] = chunk_size
+    with open(CLI_YAML, 'w') as f:
+        yaml.dump(cli_config, f, default_flow_style=False, allow_unicode=True)
+
+def update_config_dim(dim):
+    # Update lingbotvla_cli.yaml
+    with open(CLI_YAML, 'r') as f:
+        cli_config = yaml.safe_load(f)
+    cli_config['train']['action_dim'] = dim
     with open(CLI_YAML, 'w') as f:
         yaml.dump(cli_config, f, default_flow_style=False, allow_unicode=True)
 
@@ -69,8 +78,46 @@ def restore_config(orig_json, orig_yaml):
     with open(CLI_YAML, 'w') as f:
         f.write(orig_yaml)
 
-def main():
+def run_dims():
     # Save original configs
+    with open(CONFIG_JSON, 'r') as f:
+        orig_json = f.read()
+    with open(CLI_YAML, 'r') as f:
+        orig_yaml = f.read()
+
+    results = {name: [] for name in METRICS}
+    results['chunk_size'] = []
+
+    try:
+        for cs in DIMS:
+            print(f"\n{'='*60}")
+            print(f"  Running benchmark with dim = {cs}")
+            print(f"{'='*60}")
+            update_config_dim(cs)
+            output = run_benchmark()
+            print(output)
+            values = parse_output(output)
+            results['dim'].append(cs)
+            for name in METRICS:
+                results[name].append(values[name])
+            print(f"  -> Parsed: {values}")
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        # Restore original configs
+        restore_config(orig_json, orig_yaml)
+        print("\nOriginal configs restored.")
+
+    # Print summary
+    print("\n" + "="*80)
+    print("  SUMMARY")
+    print("="*80)
+    print(f"chunk_size: {results['chunk_size']}")
+    for name in METRICS:
+        print(f"{name}: {results[name]}")
+
+def run_chunk_size():
+     # Save original configs
     with open(CONFIG_JSON, 'r') as f:
         orig_json = f.read()
     with open(CLI_YAML, 'r') as f:
@@ -108,4 +155,4 @@ def main():
         print(f"{name}: {results[name]}")
 
 if __name__ == "__main__":
-    main()
+    run_dims()
