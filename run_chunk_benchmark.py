@@ -112,7 +112,7 @@ def run_dims():
     print("\n" + "="*80)
     print("  SUMMARY")
     print("="*80)
-    print(f"chunk_size: {results['chunk_size']}")
+    print(f"dim: {results['dim']}")
     for name in METRICS:
         print(f"{name}: {results[name]}")
 
