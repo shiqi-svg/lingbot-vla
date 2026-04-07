@@ -150,9 +150,9 @@ def run_chunk_size():
     print("\n" + "="*80)
     print("  SUMMARY")
     print("="*80)
-    print(f"chunk_size: {results['chunk_size']}")
+    print(f"chunk_size =  {results['chunk_size']}")
     for name in METRICS:
-        print(f"{name}: {results[name]}")
+        print(f"{name} = {results[name]}")
 
 if __name__ == "__main__":
-    run_dims()
+    run_chunk_size()
