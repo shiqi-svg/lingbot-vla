@@ -258,9 +258,8 @@ def get_gpu_utilization():
 
 def get_hit_time(H, u_0=0.9, alpha=0.7):
     """Compute hit time based on given parameters."""
-    i = torch.arange(H, dtype=torch.bfloat16)
-    u = u_0 * (1 - (i/(H-1)))**alpha
-    return u
+    i = torch.arrange
+    return 
 
 
 
@@ -344,17 +343,12 @@ def profile_inference(policy, config, observation, num_steps, use_bf16=True):
     action_embed_calls = 0
 
     step_count = 0
-    u = get_hit_time(config.n_action_steps, u_0=0.9, alpha=0.7)
     while t >= -dt / 2: #t从1-》0
-        
-        rho = t #rho 当前循环走到哪了
-        tau = (rho-u)/(1-u)
-        tau = torch.where(tau>0,tau,torch.tensor(0.0, dtype=dtype, device=device))
-        tau_input = tau.unsqueeze(0).unsqueeze(-1) # [1, H, 1]
-
+        #make rho 当前循环走到哪了
+        rho = (1 - t)
+        tau = torch.where()
         step_count += 1
         expanded_time = t.expand(bsize)
-        tau_input = tau_input.expand(bsize, tau_input.shape[1], tau_input.shape[2])
 
         # --- Time embed_suffix (contains Latent Embed MLP and Action Embed Linear) ---
         torch.cuda.synchronize()
@@ -367,11 +361,6 @@ def profile_inference(policy, config, observation, num_steps, use_bf16=True):
         time_emb = create_sinusoidal_pos_embedding(
             expanded_time, config.proj_width, min_period=4e-3, max_period=4.0, device=device
         ).to(dtype=dtype)
-
-        time_emb = create_sinusoidal_pos_embedding(
-            tau_input, config.proj_width, min_period=4e-3, max_period=4.0, device=device
-        ).to(dtype=dtype) #替换原始t为tau
-
         time_emb_ori = time_emb
 
         # --- Action Embed (Linear): action_in_proj ---
