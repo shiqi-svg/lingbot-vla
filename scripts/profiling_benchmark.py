@@ -157,7 +157,7 @@ def load_model(model_path, use_bf16=True):
         v = getattr(config, k, training_model_config[k])
         setattr(config, k, v)
 
-    # config.attention_implementation = 'flex'
+    config.attention_implementation = 'eager'
 
     base_model_path = BASE_MODEL_PATH['lingbotvla']
     config.tokenizer_path = base_model_path
@@ -344,18 +344,18 @@ def profile_inference(policy, config, observation, num_steps, use_bf16=True):
     action_embed_calls = 0
 
     step_count = 0
-    u = get_hit_time(config.n_action_steps, u_0=0.9, alpha=0.7)
+    u = get_hit_time(config.n_action_steps, u_0=0.9, alpha=0.7).to(device=device, dtype=dtype)
     while t >= -dt / 2: #t从1-》0
         
         rho = t #rho 当前循环走到哪了
         tau = (rho-u)/(1-u)
         tau = torch.where(tau>0,tau,torch.tensor(0.0, dtype=dtype, device=device))
-        tau_input = tau.unsqueeze(0).unsqueeze(-1) # [1, H, 1]
+        tau_input = tau.unsqueeze(0) # [1, H]
 
         step_count += 1
         expanded_time = t.expand(bsize)
-        tau_input = tau_input.expand(bsize, tau_input.shape[1], tau_input.shape[2])
-
+        tau_input = tau_input.expand(bsize, -1) #[bsize, H]
+        tau_input = torch.cat([expanded_time.unsqueeze(1), tau_input], dim=1).reshape(-1) #由于之后会拼一个state_emb多一维度，在这里拼上全局时间
         # --- Time embed_suffix (contains Latent Embed MLP and Action Embed Linear) ---
         torch.cuda.synchronize()
         embed_suffix_start = time.perf_counter()
@@ -367,12 +367,14 @@ def profile_inference(policy, config, observation, num_steps, use_bf16=True):
         time_emb = create_sinusoidal_pos_embedding(
             expanded_time, config.proj_width, min_period=4e-3, max_period=4.0, device=device
         ).to(dtype=dtype)
-
-        time_emb = create_sinusoidal_pos_embedding(
+        
+        time_emb_all = create_sinusoidal_pos_embedding(
             tau_input, config.proj_width, min_period=4e-3, max_period=4.0, device=device
-        ).to(dtype=dtype) #替换原始t为tau
+        ).to(dtype=dtype) #替换原始t为tau [bsize * H, 768]
 
-        time_emb_ori = time_emb
+        time_emb_ori = time_emb_all
+        bsH, hiddn = time_emb_all.shape
+        time_emb = time_emb_all.reshape(bsize, -1, hiddn)
 
         # --- Action Embed (Linear): action_in_proj ---
         torch.cuda.synchronize()
@@ -384,6 +386,7 @@ def profile_inference(policy, config, observation, num_steps, use_bf16=True):
         # --- Latent Embed (MLP): action_time_mlp ---
         torch.cuda.synchronize()
         mlp_start = time.perf_counter()
+        # breakpoint()
         if getattr(config, "separate_time_proj", False):
             time_emb_for_suffix = model.time_mlp_in(time_emb)
             time_emb_for_suffix = F.silu(time_emb_for_suffix)
@@ -391,14 +394,15 @@ def profile_inference(policy, config, observation, num_steps, use_bf16=True):
             action_time_emb = action_emb
         else:
             import einops
-            time_emb_expanded = einops.repeat(time_emb, "b d -> b n d", n=action_emb.shape[1])
-            action_time_emb = torch.cat([action_emb, time_emb_expanded], dim=-1)
+            # time_emb_expanded = einops.repeat(time_emb, "b d -> b n d", n=action_emb.shape[1])
+            time_emb_actions = time_emb[:, 1:, :]
+            action_time_emb = torch.cat([action_emb, time_emb_actions], dim=-1)
             action_time_emb = model.action_time_mlp_in(action_time_emb)
             action_time_emb = F.silu(action_time_emb)
             action_time_emb = model.action_time_mlp_out(action_time_emb)
         torch.cuda.synchronize()
         mlp_end = time.perf_counter()
-
+        # breakpoint()
         latent_embed_total_ms += (mlp_end - mlp_start) * 1000.0
         latent_embed_calls += 1
 
