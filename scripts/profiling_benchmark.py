@@ -331,6 +331,10 @@ def profile_inference(policy, config, observation, num_steps, use_bf16=True):
     # --- Action  : Iterative Denoising Loop ---
     torch.cuda.synchronize()
     action_start = time.perf_counter()
+    first_action_start = time.perf_counter()
+    sent = False
+    # 记录已经发射过的帧的索引（0 到 49）
+    streamed_indices = set([])
 
     actions_shape = (bsize, config.n_action_steps, config.max_action_dim)
     noise = torch.randn(actions_shape, device=device, dtype=dtype)
@@ -402,11 +406,11 @@ def profile_inference(policy, config, observation, num_steps, use_bf16=True):
             action_time_emb = model.action_time_mlp_out(action_time_emb)
         torch.cuda.synchronize()
         mlp_end = time.perf_counter()
-        # breakpoint()
         latent_embed_total_ms += (mlp_end - mlp_start) * 1000.0
         latent_embed_calls += 1
 
         action_time_dim = action_time_emb.shape[1]
+    
         suffix_embs = torch.cat([state_emb[:, None], action_time_emb], dim=1)
         suffix_pad_masks = torch.ones(
             (bsize, action_time_dim + 1), device=device, dtype=torch.bool
@@ -428,7 +432,14 @@ def profile_inference(policy, config, observation, num_steps, use_bf16=True):
         prefix_offsets = torch.sum(prefix_pad_masks, dim=-1)[:, None]
         position_ids = prefix_offsets + torch.cumsum(suffix_pad_masks, dim=1) - 1
 
-        ada_cond = time_emb_ori if getattr(config, 'adanorm_time', False) else None
+        if getattr(config, 'adanorm_time', False):
+            # time_emb_ori 的 shape 是 [bsize*51, dim]
+            # 我们只取第 0 个 token 的时间特征 (即全局时间 t)，保持 shape 为 [bsize, 1, dim]
+            # 这样既满足了底层对 size 1 的预期，也让它有了全局时间的概念
+            #TODO: Verify if taking only the first time token is the intended behavior
+            ada_cond = time_emb_ori[0:1, :] 
+        else:
+            ada_cond = None
 
         outputs_embeds, _ = model.qwenvl_with_expert.forward(
             attention_mask=full_att_2d_masks,
@@ -456,6 +467,22 @@ def profile_inference(policy, config, observation, num_steps, use_bf16=True):
         # Euler step
         x_t = x_t + dt * v_t
         t = t + dt
+        
+        #开始流式输出已有action：
+        for i in range(config.n_action_steps):
+            if i not in streamed_indices and tau[i]==0:
+                streamed_indices.add(i)
+                # 输出 action x_t[:, i, :]
+                clean_action_frame = x_t[:, i, :]
+                # 外界调用时，一走到 yield 就会立刻收到这一帧
+                yield i, clean_action_frame
+                # print(f"Streaming action at step {i}: {x_t[:, i, :]}")
+        
+        if not sent:
+            sent = True
+            first_action_end = time.perf_counter()
+            print(f"查看shape:{x_t.shape}")
+            print(f"First action streamed in {(first_action_end - first_action_start) * 1000.0} ms")
 
     torch.cuda.synchronize()
     action_end = time.perf_counter()
